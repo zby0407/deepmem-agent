@@ -8,6 +8,7 @@ This replaces the internal services.py dependency for open-source use.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -41,7 +42,7 @@ class LLMClient:
         api_key: str | None = None,
         base_url: str | None = None,
         model: str | None = None,
-        max_tokens: int = 2048,
+        max_tokens: int | None = None,
     ):
         self.api_key = api_key or os.getenv("LLM_API_KEY") or os.getenv("DASHSCOPE_API_KEY") or os.getenv("OPENAI_API_KEY") or ""
         self.base_url = (
@@ -51,7 +52,7 @@ class LLMClient:
             or "https://dashscope.aliyuncs.com/compatible-mode/v1"
         ).rstrip("/")
         self.model = model or os.getenv("LLM_MODEL") or "qwen-flash"
-        self.max_tokens = max_tokens
+        self.max_tokens = int(max_tokens or os.getenv("VOICE_LLM_MAX_TOKENS") or 360)
 
     def _chat_completions_url(self) -> str:
         if self.base_url.endswith("/chat/completions"):
@@ -87,9 +88,12 @@ class LLMClient:
         data = json.dumps(body).encode("utf-8")
         req = urllib.request.Request(url, data=data, headers=self._headers(), method="POST")
 
-        try:
+        def _do_request() -> dict:
             with urllib.request.urlopen(req, timeout=60, context=_SSL_CTX) as resp:
-                response_data = json.loads(resp.read().decode("utf-8"))
+                return json.loads(resp.read().decode("utf-8"))
+
+        try:
+            response_data = await asyncio.to_thread(_do_request)
 
             choice = (response_data.get("choices") or [{}])[0]
             message = choice.get("message") or {}
