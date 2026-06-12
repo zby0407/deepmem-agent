@@ -1,0 +1,12 @@
+# DeepMem Agent — Minimal dependencies
+# The core agent modules use only Python stdlib (sqlite3, json, asyncio, etc.)
+# The only runtime dependencies are for the benchmark script and HTTP clients.
+
+python-dotenv>=1.0.0     # Load .env files for API keys
+
+# Optional: for SSL certificate handling on macOS
+# certifi
+
+# Note: No numpy, aiohttp, or other heavy dependencies.
+# HTTP calls use stdlib urllib.request.
+# LLM and embedding calls use OpenAI-compatible REST APIs.

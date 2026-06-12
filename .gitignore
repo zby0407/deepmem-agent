@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.pyc
+*.sqlite3
+data/locomo/
+data/longmemeval/
+results*.json
+.DS_Store
