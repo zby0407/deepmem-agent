@@ -6,3 +6,4 @@ data/locomo/
 data/longmemeval/
 results*.json
 .DS_Store
+test_run_results.json

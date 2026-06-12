@@ -780,6 +780,7 @@ def main():
                 data = [s for s in data if str(s.get("sample_id", "")) in ids]
                 print(f"\nRunning LOCOMO benchmark (samples={args.sample_ids}, max_turns={args.max_turns})", flush=True)
             else:
+                data = data[:args.limit]
                 print(f"\nRunning LOCOMO benchmark (limit={args.limit}, max_turns={args.max_turns})", flush=True)
             locomo_results = await run_locomo(llm_caller, data, len(data), args.qa_limit, args.max_turns, args.concurrency, args.sample_concurrency)
             results.extend(locomo_results)
