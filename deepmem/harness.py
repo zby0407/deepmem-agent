@@ -14,6 +14,7 @@ from typing import Any, Protocol
 logger = logging.getLogger(__name__)
 
 from .memory_manager import MemoryManager, build_memory_context_block
+from .config import cfg
 
 
 class VoiceLLM(Protocol):
@@ -75,18 +76,17 @@ class RealtimeVoiceHarness:
                             "然后用英译中、中译英、填空等方式逐一提问。用户回答后调用 vocab_rate(word, quality) 评分。"
                             "用户要加单词时调用 vocab_add。查看进度调用 vocab_stats。"
                         )
-            self.system_prompt = (
-                f"你是一个实时语音对话助手。回复要自然、简短、口语化。今天是{today}。\n\n"
-                "你的记忆系统会自动提取和回忆相关信息（在 <memory-context> 标签中），直接使用即可。\n"
-                "当用户告诉你重要个人信息（名字、身份、偏好）时，用 core_memory_add 保存到核心记忆。\n"
-                "重要：当用户的需求匹配以下工具时，必须调用工具而不是自己回答："
-                f"{extra_hints}"
-            )
+            self.system_prompt = cfg(
+                "prompts.voice_system_tools",
+                "You are a realtime voice assistant. Reply naturally and concisely. "
+                "Today is {today}. Use tools when appropriate.{extra_hints}",
+            ).format(today=today, extra_hints=extra_hints)
         else:
-            self.system_prompt = (
-                f"你是一个实时语音对话助手。回复要自然、简短、口语化。今天是{today}。\n\n"
-                "你的记忆系统会自动提取和回忆相关信息（在 <memory-context> 标签中），直接使用即可。"
-            )
+            self.system_prompt = cfg(
+                "prompts.voice_system",
+                "You are a realtime voice assistant. Reply naturally and concisely. "
+                "Today is {today}.",
+            ).format(today=today)
         self.turn_number = 0
         self.active_partial_text = ""
         self.pending_file_context = None  # Set by VoiceRuntimeLLMProcessor on FileContextFrame

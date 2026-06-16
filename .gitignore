@@ -1,9 +1,10 @@
 .env
+deepmem/config.yaml
 __pycache__/
 *.pyc
 *.sqlite3
 data/locomo/
 data/longmemeval/
 results*.json
+test_*.json
 .DS_Store
-test_run_results.json

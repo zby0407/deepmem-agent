@@ -28,6 +28,7 @@ from .memory_extract import _md5, extract_and_dedup, semantic_dedup
 from .memory_history import MemoryHistoryManager
 from .memory_provider import MemoryProvider
 from .scoring import ENTITY_BOOST_WEIGHT, get_bm25_params, normalize_bm25, score_and_rank
+from .config import cfg
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,7 @@ class LocalExternalMemoryProvider(MemoryProvider):
         user_id: str = "",
         db_path: str | Path = DB_PATH,
         llm_client: Any = None,
-        model: str = "qwen-flash",
+        model: str | None = None,
         embedding_client: Any = None,
         skip_embedding: bool = False,
     ):
@@ -74,7 +75,7 @@ class LocalExternalMemoryProvider(MemoryProvider):
         self._frozen_system_built: bool = False
         # LLM + embedding
         self._llm = llm_client
-        self._model = model
+        self._model = model or cfg("model.llm", "qwen-flash")
         self._embedder = embedding_client
         # Recent extraction buffer for dedup within session
         self._recent_hashes: set[str] = set()
@@ -272,10 +273,10 @@ class LocalExternalMemoryProvider(MemoryProvider):
             if not self._frozen_system_built:
                 self._build_frozen_snapshot()
 
-            results = self._hybrid_search(query, limit=5)
+            results = self._hybrid_search(query, limit=cfg("retrieval.prefetch_limit", 5))
 
             # Always-inject rules (hindsight) — forced into every turn
-            always_rules = self._get_always_inject_rules(limit=3)
+            always_rules = self._get_always_inject_rules(limit=cfg("retrieval.always_inject_hindsight_limit", 3))
             if always_rules:
                 seen_ids = {r.get("id") for r in results}
                 for rule in always_rules:
@@ -318,8 +319,8 @@ class LocalExternalMemoryProvider(MemoryProvider):
             rows = self._conn.execute(
                 "SELECT content FROM voice_memories "
                 "WHERE user_id = ? AND scope = 'semantic' AND invalid_at IS NULL "
-                "ORDER BY created_at DESC LIMIT 5",
-                (self._user_id,),
+                "ORDER BY created_at DESC LIMIT ?",
+                (self._user_id, cfg("retrieval.frozen_snapshot_limit", 5)),
             ).fetchall()
             self._frozen_identity_lines = [r["content"] for r in rows]
             self._frozen_system_built = True
@@ -357,7 +358,7 @@ class LocalExternalMemoryProvider(MemoryProvider):
         5. Score and rank (mem0 score_and_rank)
         6. Apply retention decay (simplified 2-factor: age + confirmation)
         """
-        fetch_limit = max(limit * 4, 20)
+        fetch_limit = max(limit * cfg("retrieval.fts5_fetch_multiplier", 4), cfg("retrieval.fts5_fetch_min", 20))
 
         # Step 1: FTS5 search → results + candidate_ids for semantic pre-filter
         fts_results, candidate_ids = self._search_db(query, limit=fetch_limit)
@@ -380,7 +381,7 @@ class LocalExternalMemoryProvider(MemoryProvider):
         entity_boosts = self._compute_link_boosts(semantic_results, fts_results)
 
         # Step 5: Score and rank using mem0's formula
-        results = score_and_rank(semantic_results, bm25_scores, entity_boosts, threshold=0.15, top_k=limit)
+        results = score_and_rank(semantic_results, bm25_scores, entity_boosts, threshold=cfg("retrieval.score_threshold", 0.15), top_k=limit)
 
         # Step 6: Apply retention decay (simplified 2-factor)
         # retention = e^(-k*age) * min(1.8, 1+ln(1+confirmations)*0.08)
@@ -393,7 +394,10 @@ class LocalExternalMemoryProvider(MemoryProvider):
             confirmations = r.get("confirmation_count") or 0
             age_days = max(0.0, (now - created_at) / 86400)
             age_decay = math.exp(-k * age_days)
-            access_boost = min(1.8, 1.0 + math.log1p(confirmations) * 0.08)
+            access_boost = min(
+                cfg("retrieval.retention_access_boost_cap", 1.8),
+                1.0 + math.log1p(confirmations) * cfg("retrieval.retention_confirmation_factor", 0.08),
+            )
             retention = age_decay * access_boost
             r["retention_score"] = round(retention, 4)
             confidence = r.get("confidence") or 0.7
@@ -424,7 +428,7 @@ class LocalExternalMemoryProvider(MemoryProvider):
                         pass
             if links:
                 for linked_id in links:
-                    boosts[str(linked_id)] = boosts.get(str(linked_id), 0) + ENTITY_BOOST_WEIGHT * 0.5
+                    boosts[str(linked_id)] = boosts.get(str(linked_id), 0) + ENTITY_BOOST_WEIGHT * cfg("retrieval.linked_boost_factor", 0.5)
         return boosts
 
     def _semantic_search(self, query: str, limit: int = 5,
@@ -468,7 +472,7 @@ class LocalExternalMemoryProvider(MemoryProvider):
                 try:
                     mem_vec = _decode_embedding(row["embedding"])
                     score = _cosine_similarity(query_vec, mem_vec)
-                    if score >= 0.15:
+                    if score >= cfg("retrieval.semantic_floor", 0.15):
                         links = None
                         if row["linked_memory_ids"]:
                             try:
@@ -551,8 +555,8 @@ class LocalExternalMemoryProvider(MemoryProvider):
         self._session_history.append({"role": "user", "content": user_content or ""})
         self._session_history.append({"role": "assistant", "content": assistant_content or ""})
         # Keep last 20 messages
-        if len(self._session_history) > 20:
-            self._session_history = self._session_history[-20:]
+        if len(self._session_history) > cfg("buffers.session_history", 20):
+            self._session_history = self._session_history[-cfg("buffers.session_history", 20):]
 
         # Fire-and-forget async extraction
         try:
@@ -567,17 +571,17 @@ class LocalExternalMemoryProvider(MemoryProvider):
             today = date.today().strftime("%Y-%m-%d")
 
             # Get existing memories for prompt context + hash dedup
-            existing = self._get_existing_for_dedup(limit=20)
+            existing = self._get_existing_for_dedup(limit=cfg("buffers.existing_dedup", 20))
             existing_hashes = {m["hash"] for m in existing if m.get("hash")}
             existing_for_prompt = [
                 {"id": str(m["id"]), "text": m["content"]}
-                for m in existing[:10]
+                for m in existing[:cfg("buffers.dedup_prompt_existing_cap", 10)]
             ]
 
             # Build existing embedding map for semantic dedup
             existing_embeddings: dict[str, list[float]] = {}
             if self._embedder:
-                for m in existing[:20]:
+                for m in existing[:cfg("buffers.existing_dedup", 20)]:
                     if m.get("embedding"):
                         try:
                             existing_embeddings[str(m["id"])] = _decode_embedding(m["embedding"])
@@ -615,7 +619,7 @@ class LocalExternalMemoryProvider(MemoryProvider):
             # Phase 3: Semantic dedup (embedding similarity >= 0.90)
             if existing_embeddings:
                 new_texts = semantic_dedup(
-                    new_texts, existing_embeddings, self._embedder, threshold=0.90,
+                    new_texts, existing_embeddings, self._embedder,
                 )
                 # Rebuild hashes to match surviving texts
                 new_hashes = {_md5(t) for t in new_texts}
@@ -651,8 +655,8 @@ class LocalExternalMemoryProvider(MemoryProvider):
                     )
 
             # Keep recent_texts bounded
-            if len(self._recent_texts) > 50:
-                self._recent_texts = self._recent_texts[-50:]
+            if len(self._recent_texts) > cfg("buffers.recent_texts", 50):
+                self._recent_texts = self._recent_texts[-cfg("buffers.recent_texts", 50):]
 
             logger.info("[MemoryExtract] Turn processed: %d added", added)
 
@@ -703,7 +707,7 @@ class LocalExternalMemoryProvider(MemoryProvider):
             # Compute text overlap to decide reinforce vs supersede
             overlap = self._text_overlap(new_normalized, old_normalized)
 
-            if overlap >= 0.7:
+            if overlap >= cfg("retrieval.contradiction_reinforce_overlap", 0.7):
                 # High overlap = same fact, reinforce (Zep episode count pattern)
                 self._conn.execute(
                     "UPDATE voice_memories SET confirmation_count = confirmation_count + 1 WHERE id = ?",
@@ -714,7 +718,7 @@ class LocalExternalMemoryProvider(MemoryProvider):
                     created_at=row["created_at"], updated_at=now,
                 )
                 logger.info("[Resolve] id=%d reinforced (overlap=%.2f)", linked_id_int, overlap)
-            elif overlap < 0.3:
+            elif overlap < cfg("retrieval.contradiction_supersede_overlap", 0.3):
                 # Low overlap = different fact about same topic = contradiction
                 # Zep pattern: set invalid_at (never delete)
                 self._conn.execute(
@@ -748,16 +752,12 @@ class LocalExternalMemoryProvider(MemoryProvider):
         union = len(a | b)
         return intersection / union if union > 0 else 0.0
 
-    # Decay rates per scope — based on cognitive science memory systems
-    # (Tulving 1972: episodic vs semantic; Anderson ACT-R: procedural)
-    # semantic:    k=0.0005 (half-life ~1386d) — stable personal facts (name, birthday, occupation)
-    # episodic:    k=0.02   (half-life ~35d)   — time-bound events, plans, recent activities
-    # procedural:  k=0.005  (half-life ~139d)  — habits, routines, stable preferences
-    _SCOPE_DECAY_K = {
-        "semantic": 0.0005,
-        "episodic": 0.02,
-        "procedural": 0.005,
-    }
+    # Decay rates per scope — loaded from config.yaml
+    # Cognitive science basis: Tulving 1972, Anderson ACT-R
+    @staticmethod
+    def _scope_decay_k(scope: str) -> float:
+        decay_map = cfg("memory.scope_decay", {})
+        return decay_map.get(scope, 0.02)
 
     def _compute_retention(self, mem: dict) -> float:
         """2-factor retention: age decay × confirmation boost.
@@ -770,7 +770,10 @@ class LocalExternalMemoryProvider(MemoryProvider):
         confirmations = mem.get("confirmation_count") or 0
         age_days = max(0.0, (now - created_at) / 86400)
         age_decay = math.exp(-k * age_days)
-        access_boost = min(1.8, 1.0 + math.log1p(confirmations) * 0.08)
+        access_boost = min(
+            cfg("retrieval.retention_access_boost_cap", 1.8),
+            1.0 + math.log1p(confirmations) * cfg("retrieval.retention_confirmation_factor", 0.08),
+        )
         return age_decay * access_boost
 
     def _store_memory(
@@ -799,7 +802,7 @@ class LocalExternalMemoryProvider(MemoryProvider):
         now = time.time()
         links_json = json.dumps(linked_memory_ids) if linked_memory_ids else None
         meta_json = json.dumps(metadata, ensure_ascii=False) if metadata else "{}"
-        decay_k = self._SCOPE_DECAY_K.get(scope, 0.02)
+        decay_k = self._scope_decay_k(scope)
         try:
             cursor = self._conn.execute(
                 """INSERT INTO voice_memories
@@ -1080,7 +1083,7 @@ class LocalExternalMemoryProvider(MemoryProvider):
 
         if tool_name == "memory_search":
             query = args.get("query", "")
-            results = self._hybrid_search(query, limit=5)
+            results = self._hybrid_search(query, limit=cfg("retrieval.prefetch_limit", 5))
             return json.dumps({"ok": True, "results": results}, ensure_ascii=False)
 
         if tool_name == "memory_update":

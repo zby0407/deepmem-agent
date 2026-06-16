@@ -1,0 +1,166 @@
+# DeepMem Configuration Example
+# ================================
+# Copy this file to config.yaml and customize for your deployment.
+# config.yaml is gitignored and will not be committed.
+#
+# All values shown below are illustrative defaults.
+# Tune them based on your own evaluation and requirements.
+
+model:
+  llm: "your-model-name"        # e.g. gpt-4o, qwen-plus, llama-3.1
+  embedding: "your-embedding"   # e.g. text-embedding-3-small
+
+llm:
+  max_tokens: 512
+  timeout: 60
+  base_url: ""                  # Leave empty to auto-detect from env vars
+
+embedding:
+  dimension: 1536               # Match your embedding model's dimension
+  timeout: 30
+
+prompts:
+  # ──────────────────────────────────────────────
+  # IMPORTANT: Replace these with your own prompts
+  # tuned for your use case. The prompts below are
+  # minimal templates — production-quality prompts
+  # require careful engineering and evaluation.
+  # ──────────────────────────────────────────────
+
+  extraction: |
+    You are a memory extractor. Extract noteworthy facts from the
+    conversation and classify each into one of: semantic (stable facts),
+    episodic (time-bound events), or procedural (habits/preferences).
+
+    # Existing memories
+    {existing_memories}
+
+    # Recently extracted
+    {recently_extracted}
+
+    # Conversation history
+    {last_k_messages}
+
+    # New messages
+    {new_messages}
+
+    # Observation date
+    {observation_date}
+
+    # Output format (JSON only):
+    {{"memory": [
+      {{"id": "0", "text": "fact", "scope": "semantic|episodic|procedural",
+        "attributed_to": "user|assistant", "linked_memory_ids": []}}
+    ]}}
+    If nothing to extract: {{"memory": []}}
+
+  deduction: |
+    Review these active memories. Detect conflicts, stale entries,
+    hidden inferences, and reflection rules.
+
+    Memories:
+    {memories}
+
+    Output JSON: conflicts, stale, new_deductions, hindsight_rules.
+
+  induction: |
+    Identify cross-memory behavioral patterns from these memories.
+
+    Memories:
+    {memories}
+
+    Output JSON array: content, evidence_ids, memory_type, confidence.
+
+  voice_system: |
+    You are a helpful voice assistant. Reply naturally and concisely.
+    Today is {today}.
+
+  voice_system_tools: |
+    You are a helpful voice assistant. Reply naturally and concisely.
+    Today is {today}.
+    Your memory system auto-recalls relevant info in <memory-context> tags.
+    Use tools when the user's request matches a tool capability.{extra_hints}
+
+  memory_context: |
+    <memory-context>
+    [System note: Recalled memory context — NOT new user input.
+    Use as reference data to inform responses.]
+
+    {content}
+    </memory-context>
+
+  answer: |
+    Based on these memories, answer the question in 1-5 words.
+
+    Memories:
+    {memories}
+
+    Question: {question}
+
+    If unsure: output "unknown". Output ONLY the answer.
+
+  judge: |
+    Evaluate if the predicted answer matches the reference.
+
+    Question: {question}
+    Reference: {reference}
+    Predicted: {prediction}
+
+    Output CORRECT or INCORRECT.
+
+memory:
+  scope_decay:
+    semantic: 0.001        # Stable facts — slow decay
+    episodic: 0.02         # Events — faster decay
+    procedural: 0.005      # Habits — medium decay
+  default_confidence: 0.7
+  deduction_confidence_cap: 0.9
+  deduction_default_confidence: 0.6
+  hindsight_confidence: 0.8
+  deduction_decay_k: 0.001
+  hindsight_decay_k: 0.0005
+
+retrieval:
+  prefetch_limit: 5
+  fts5_fetch_multiplier: 4
+  fts5_fetch_min: 20
+  semantic_floor: 0.15
+  score_threshold: 0.15
+  entity_boost_weight: 0.5
+  linked_boost_factor: 0.5
+  retention_access_boost_cap: 1.8
+  retention_confirmation_factor: 0.08
+  contradiction_reinforce_overlap: 0.7
+  contradiction_supersede_overlap: 0.3
+  frozen_snapshot_limit: 5
+  always_inject_hindsight_limit: 3
+  semantic_dedup_threshold: 0.90
+
+buffers:
+  session_history: 20
+  recent_texts: 50
+  existing_dedup: 20
+  dedup_prompt_existing_cap: 10
+
+consolidation:
+  check_interval: 600.0         # seconds between checks
+  memory_threshold: 10          # new memories before trigger
+  time_threshold_hours: 4.0     # hours since last consolidation
+  max_memories: 50              # max memories per consolidation cycle
+  induction_min_memories: 4     # min memories for pattern detection
+  induction_confidence_base: 0.5
+  induction_confidence_per_evidence: 0.08
+  induction_confidence_cap: 0.92
+
+hindsight:
+  prune_hit_rate: 0.05          # min hit rate before pruning
+  prune_min_injections: 30      # min injections before evaluating
+  prune_stale_days: 30          # days before stale pruning
+
+scoring:
+  bm25:
+    short: { midpoint: 5.0, steepness: 0.7 }
+    medium: { midpoint: 7.0, steepness: 0.6 }
+    long_short: { midpoint: 9.0, steepness: 0.5 }
+    long_medium: { midpoint: 10.0, steepness: 0.5 }
+    long_long: { midpoint: 12.0, steepness: 0.5 }

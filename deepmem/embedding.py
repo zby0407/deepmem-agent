@@ -12,6 +12,8 @@ import os
 import ssl
 import urllib.request
 
+from .config import cfg
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -52,8 +54,8 @@ class EmbeddingClient:
             or os.getenv("LLM_API_KEY")
             or ""
         )
-        self.model = model or os.getenv("EMBEDDING_MODEL") or "text-embedding-v3"
-        self.dimension = dimension
+        self.model = model or os.getenv("EMBEDDING_MODEL") or cfg("model.embedding", "text-embedding-v3")
+        self.dimension = dimension or cfg("embedding.dimension", 1024)
         self._base_url = base_url or os.getenv("EMBEDDING_BASE_URL") or ""
 
     def _is_openai_compatible(self) -> bool:

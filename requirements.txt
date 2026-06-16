@@ -3,6 +3,7 @@
 # The only runtime dependencies are for the benchmark script and HTTP clients.
 
 python-dotenv>=1.0.0     # Load .env files for API keys
+pyyaml>=6.0              # Load config.yaml for tuning parameters
 
 # Optional: for SSL certificate handling on macOS
 # certifi

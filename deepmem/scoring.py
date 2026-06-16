@@ -11,6 +11,8 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from .config import cfg
+
 
 def get_bm25_params(query: str) -> tuple[float, float]:
     """Get BM25 sigmoid parameters based on query length.
@@ -22,17 +24,23 @@ def get_bm25_params(query: str) -> tuple[float, float]:
         (midpoint, steepness) for sigmoid normalization.
     """
     num_terms = len(query.split())
+    bm25 = cfg("scoring.bm25") or {}
 
     if num_terms <= 3:
-        return 5.0, 0.7
+        p = bm25.get("short", {})
+        return p.get("midpoint", 5.0), p.get("steepness", 0.7)
     elif num_terms <= 6:
-        return 7.0, 0.6
+        p = bm25.get("medium", {})
+        return p.get("midpoint", 7.0), p.get("steepness", 0.6)
     elif num_terms <= 9:
-        return 9.0, 0.5
+        p = bm25.get("long_short", {})
+        return p.get("midpoint", 9.0), p.get("steepness", 0.5)
     elif num_terms <= 15:
-        return 10.0, 0.5
+        p = bm25.get("long_medium", {})
+        return p.get("midpoint", 10.0), p.get("steepness", 0.5)
     else:
-        return 12.0, 0.5
+        p = bm25.get("long_long", {})
+        return p.get("midpoint", 12.0), p.get("steepness", 0.5)
 
 
 def normalize_bm25(raw_score: float, midpoint: float, steepness: float) -> float:
@@ -49,7 +57,7 @@ def normalize_bm25(raw_score: float, midpoint: float, steepness: float) -> float
     return 1.0 / (1.0 + math.exp(-steepness * (raw_score - midpoint)))
 
 
-ENTITY_BOOST_WEIGHT = 0.5
+ENTITY_BOOST_WEIGHT = cfg("retrieval.entity_boost_weight", 0.5)
 
 
 def score_and_rank(

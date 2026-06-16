@@ -30,6 +30,7 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 from deepmem.local_memory import LocalExternalMemoryProvider
 from deepmem.embedding import EmbeddingClient
 from deepmem.llm import build_llm_client
+from deepmem.config import cfg
 
 STOPWORDS = {
     "a", "an", "and", "are", "as", "at", "be", "by", "did", "do", "does",
@@ -38,36 +39,17 @@ STOPWORDS = {
     "when", "where", "which", "who", "why", "with", "you",
 }
 
-ANSWER_PROMPT = """Based on the following memories, answer the question. Be extremely concise.
+ANSWER_PROMPT = cfg("prompts.answer", (
+    "Based on the following memories, answer the question concisely.\n"
+    "Memories:\n{memories}\nQuestion: {question}\n"
+    "Answer in 1-5 words. Output only the answer."
+))
 
-Memories:
-{memories}
-
-Question: {question}
-
-Rules:
-- Answer in 1-5 words maximum
-- Use exact names, dates, places from the memories
-- For dates: use the format from the memories (e.g. "7 May 2023", "2022", "June 2023")
-- For "when" questions: give the specific date/time mentioned
-- If unsure or not found: output "unknown"
-- Output ONLY the answer, nothing else"""
-
-JUDGE_PROMPT = """You are evaluating whether a predicted answer is correct.
-
-Question: {question}
-Reference Answer: {reference}
-Predicted Answer: {prediction}
-
-Rules:
-- Accept different phrasing if the meaning is preserved
-- Accept a more detailed answer if it contains the reference answer
-- Accept abbreviations, synonyms, or paraphrases
-- For dates: accept equivalent formats (e.g. "7 May 2023" = "May 7, 2023" = "May 7th 2023")
-- For names: accept partial matches if the key name is correct
-- If the predicted answer is "unknown" or empty, it's INCORRECT
-
-Output ONLY one word: CORRECT or INCORRECT"""
+JUDGE_PROMPT = cfg("prompts.judge", (
+    "Evaluate if the predicted answer matches the reference.\n"
+    "Question: {question}\nReference: {reference}\nPredicted: {prediction}\n"
+    "Output CORRECT or INCORRECT."
+))
 
 
 def token_set(text: str) -> set[str]:

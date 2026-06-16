@@ -34,6 +34,7 @@ import inspect
 from typing import Any, Dict, List, Optional
 
 from .memory_provider import MemoryProvider
+from .config import cfg
 
 
 def tool_error(message: str) -> str:
@@ -244,16 +245,15 @@ def build_memory_context_block(raw_context: str) -> str:
     clean = sanitize_context(raw_context)
     if clean != raw_context:
         logger.warning("memory provider returned pre-wrapped context; stripped")
-    return (
+    tpl = cfg(
+        "prompts.memory_context",
         "<memory-context>\n"
         "[System note: The following is recalled memory context, "
-        "NOT new user input. Treat as authoritative reference data — "
-        "this is the agent's persistent memory and should inform all responses. "
-        "When the user asks about identity, preferences, plans, or dates, answer "
-        "from this memory instead of saying you do not know.]\n\n"
-        f"{clean}\n"
+        "NOT new user input. Treat as authoritative reference data.]\n\n"
+        "{content}\n"
         "</memory-context>"
     )
+    return tpl.replace("{content}", clean)
 
 
 class MemoryManager:

@@ -23,90 +23,16 @@ import re
 import time
 from typing import Any
 
+from .config import cfg
+
 logger = logging.getLogger(__name__)
 
-# Deduction prompt — adapted from vehicle_memory/consolidation.py DEDUCTION_PROMPT
-# + Zep dedupe_edges.py contradiction detection pattern
-DEDUCTION_PROMPT = """你是一个记忆系统的合并专家。
-审查以下所有活跃记忆，执行以下任务:
+# Deduction prompt — loaded from config.yaml
+# See config.example.yaml for the schema and minimal template.
+DEDUCTION_PROMPT = cfg("prompts.deduction", "")
 
-1. **冲突检测**: 找出互相矛盾的记忆（inline检测可能遗漏的）
-2. **过时检测**: 找出已被更新事实取代的记忆
-3. **隐含推理**: 从已有记忆中发现被遗漏的逻辑推论
-4. **反思规则**: 基于记忆间的关联，发现应该被记住但容易被遗忘的规律
-
-记忆列表:
-{memories}
-
-输出一个 JSON 对象:
-{{
-  "conflicts": [
-    {{
-      "keep_id": 应保留的记忆id,
-      "invalidate_id": 应被取代的记忆id,
-      "reason": "原因"
-    }}
-  ],
-  "stale": [
-    {{
-      "memory_id": 应标记为过时的记忆id,
-      "reason": "原因"
-    }}
-  ],
-  "new_deductions": [
-    {{
-      "content": "新推论",
-      "confidence": 0.0-1.0,
-      "evidence_ids": [支撑记忆id列表]
-    }}
-  ],
-  "hindsight_rules": [
-    {{
-      "content": "反思规则描述",
-      "reason": "为什么这条规则重要",
-      "evidence_ids": [支撑记忆id列表]
-    }}
-  ]
-}}
-
-规则:
-- 冲突: 同一话题但矛盾的记忆，保留 confidence 更高的
-- 过时: 如果新记忆的前提包含旧记忆的反面，旧记忆应被标记过时
-- 隐含推理: 从多条记忆中可推出但未被明确记录的事实
-- 反思规则: 帮助系统在未来更好地检索和使用记忆的规律
-  例如: "当用户提到家人时，应该同时回忆用户提到的家庭活动"
-  例如: "关于用户工作相关的记忆，应该关联用户提到的同事名字"
-  只在有明确证据时生成，不要臆造规则
-- 如果没有发现任何问题，返回 {{"conflicts": [], "stale": [], "new_deductions": [], "hindsight_rules": []}}
-- 只输出 JSON，不要其他文字"""
-
-# Induction prompt — adapted from vehicle_memory/consolidation.py INDUCTION_PROMPT
-# + Zep build_communities() pattern detection
-INDUCTION_PROMPT = """你是一个记忆系统的模式识别专家。
-基于以下多条记忆，识别跨记忆的行为模式和偏好趋势。
-
-记忆列表:
-{memories}
-
-输出一个 JSON 数组，每条模式:
-{{
-  "content": "模式描述",
-  "evidence_ids": [支撑记忆id列表],
-  "memory_type": "habit|preference|relationship",
-  "confidence": 0.0-1.0
-}}
-
-规则:
-- 至少需要 2 条不同记忆作为证据
-- 识别的是长期模式，不是单次事件
-- confidence = min(0.5 + 0.08 * evidence_count, 0.92)
-- memory_type 说明:
-  - habit: 重复行为模式 → 存为 procedural 记忆
-  - preference: 稳定偏好趋势 → 存为 procedural 记忆
-  - relationship: 人际关系模式 → 存为 semantic 记忆
-- 例子: 多条关于温度调节的记忆 → "用户对车内温度非常敏感" (type=preference)
-- 如果没有足够证据形成模式，返回空数组 []
-- 只输出 JSON 数组，不要其他文字"""
+# Induction prompt — loaded from config.yaml
+INDUCTION_PROMPT = cfg("prompts.induction", "")
 
 
 def _extract_json(raw: str) -> Any:
@@ -161,17 +87,17 @@ class VoiceMemoryConsolidator:
         memory_provider: Any,
         *,
         llm_client: Any = None,
-        model: str = "qwen-flash",
-        check_interval: float = 600.0,  # Check every 10 minutes
-        memory_threshold: int = 10,
-        time_threshold_hours: float = 4.0,
+        model: str | None = None,
+        check_interval: float | None = None,
+        memory_threshold: int | None = None,
+        time_threshold_hours: float | None = None,
     ):
         self._provider = memory_provider
         self._llm = llm_client
-        self._model = model
-        self.check_interval = check_interval
-        self.memory_threshold = memory_threshold
-        self.time_threshold = time_threshold_hours * 3600
+        self._model = model or cfg("model.llm", "qwen-flash")
+        self.check_interval = check_interval if check_interval is not None else cfg("consolidation.check_interval", 600.0)
+        self.memory_threshold = memory_threshold if memory_threshold is not None else cfg("consolidation.memory_threshold", 10)
+        self.time_threshold = (time_threshold_hours if time_threshold_hours is not None else cfg("consolidation.time_threshold_hours", 4.0)) * 3600
         self._running = False
         self._task: asyncio.Task | None = None
         self._last_consolidation: float = 0.0
@@ -268,8 +194,8 @@ class VoiceMemoryConsolidator:
             "SELECT id, content, scope, confidence, confirmation_count, created_at "
             "FROM voice_memories "
             "WHERE user_id = ? AND invalid_at IS NULL AND scope != 'conversation' "
-            "ORDER BY created_at DESC LIMIT 50",
-            (self._provider._user_id,),
+            "ORDER BY created_at DESC LIMIT ?",
+            (self._provider._user_id, cfg("consolidation.max_memories", 50)),
         ).fetchall()
 
         if not memories:
@@ -286,7 +212,7 @@ class VoiceMemoryConsolidator:
             result["hindsight_rules"] = deduction_result.get("hindsight_rules", 0)
 
         # --- Phase 2: Induction ---
-        if len(memories) >= 4:
+        if len(memories) >= cfg("consolidation.induction_min_memories", 4):
             induction_result = await self._run_induction(memory_dicts)
             result["patterns_found"] = induction_result.get("patterns_found", 0)
 
@@ -373,7 +299,7 @@ class VoiceMemoryConsolidator:
                     content = (deduction.get("content") or "").strip()
                     if not content:
                         continue
-                    confidence = min(max(float(deduction.get("confidence", 0.6)), 0), 0.9)
+                    confidence = min(max(float(deduction.get("confidence", cfg("memory.deduction_default_confidence", 0.6))), 0), cfg("memory.deduction_confidence_cap", 0.9))
                     evidence_ids = deduction.get("evidence_ids", [])
                     mem_id = await self._provider._store_memory(
                         content, "episodic",
@@ -383,8 +309,8 @@ class VoiceMemoryConsolidator:
                     if mem_id:
                         # Set slow decay for derived deductions (Letta core memory pattern)
                         self._provider._conn.execute(
-                            "UPDATE voice_memories SET decay_k = 0.001 WHERE id = ?",
-                            (mem_id,),
+                            "UPDATE voice_memories SET decay_k = ? WHERE id = ?",
+                            (cfg("memory.deduction_decay_k", 0.001), mem_id),
                         )
                         result["new_deductions"] += 1
 
@@ -397,15 +323,15 @@ class VoiceMemoryConsolidator:
                     mem_id = await self._provider._store_memory(
                         content, "procedural",
                         linked_memory_ids=[str(eid) for eid in evidence_ids if eid],
-                        confidence=0.8,
+                        confidence=cfg("memory.hindsight_confidence", 0.8),
                         metadata={"kind": "hindsight_rule",
                                   "hit_count": 0, "injected_count": 0},
                     )
                     if mem_id:
                         # Hindsight rules: very slow decay (semantic-like permanence)
                         self._provider._conn.execute(
-                            "UPDATE voice_memories SET decay_k = 0.0005 WHERE id = ?",
-                            (mem_id,),
+                            "UPDATE voice_memories SET decay_k = ? WHERE id = ?",
+                            (cfg("memory.hindsight_decay_k", 0.0005), mem_id),
                         )
                         result["hindsight_rules"] += 1
                         logger.info("[Consolidator] Hindsight rule: %s", content[:60])
@@ -468,7 +394,11 @@ class VoiceMemoryConsolidator:
                         continue
 
                     evidence_count = len(evidence_ids)
-                    confidence = min(0.5 + 0.08 * evidence_count, 0.92)
+                    confidence = min(
+                        cfg("consolidation.induction_confidence_base", 0.5)
+                        + cfg("consolidation.induction_confidence_per_evidence", 0.08) * evidence_count,
+                        cfg("consolidation.induction_confidence_cap", 0.92),
+                    )
                     memory_type = pattern.get("memory_type", "habit")
                     scope = _TYPE_TO_SCOPE.get(memory_type, "procedural")
 
@@ -481,9 +411,9 @@ class VoiceMemoryConsolidator:
                         # Derived patterns: slow decay (Letta core memory pattern)
                         # confirmation_count = evidence count (Zep episode count pattern)
                         self._provider._conn.execute(
-                            "UPDATE voice_memories SET decay_k = 0.001, "
+                            "UPDATE voice_memories SET decay_k = ?, "
                             "confirmation_count = ? WHERE id = ?",
-                            (evidence_count, mem_id),
+                            (cfg("memory.deduction_decay_k", 0.001), evidence_count, mem_id),
                         )
                         result["patterns_found"] += 1
                         logger.info("[Consolidator] Pattern: %s (type=%s, evidence=%d)", content[:60], memory_type, evidence_count)
@@ -514,7 +444,7 @@ class VoiceMemoryConsolidator:
 
         now = time.time()
         pruned = 0
-        stale_threshold = now - 30 * 86400  # 30 days
+        stale_threshold = now - cfg("hindsight.prune_stale_days", 30) * 86400
 
         try:
             rows = self._provider._conn.execute(
@@ -539,7 +469,7 @@ class VoiceMemoryConsolidator:
                     reason = ""
 
                     # Rule 1: Low hit rate after enough data points
-                    if injected >= 30 and hit / injected < 0.05:
+                    if injected >= cfg("hindsight.prune_min_injections", 30) and hit / injected < cfg("hindsight.prune_hit_rate", 0.05):
                         should_invalidate = True
                         reason = f"low hit rate ({hit}/{injected}={hit/injected:.1%})"
 

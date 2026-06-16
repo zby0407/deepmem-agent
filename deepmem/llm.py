@@ -16,6 +16,8 @@ import ssl
 import urllib.request
 from typing import Any, AsyncIterator
 
+from .config import cfg
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -49,10 +51,11 @@ class LLMClient:
             base_url
             or os.getenv("LLM_BASE_URL")
             or os.getenv("OPENAI_BASE_URL")
+            or cfg("llm.base_url", "")
             or "https://dashscope.aliyuncs.com/compatible-mode/v1"
         ).rstrip("/")
-        self.model = model or os.getenv("LLM_MODEL") or "qwen-flash"
-        self.max_tokens = int(max_tokens or os.getenv("VOICE_LLM_MAX_TOKENS") or 360)
+        self.model = model or os.getenv("LLM_MODEL") or cfg("model.llm", "qwen-flash")
+        self.max_tokens = int(max_tokens or os.getenv("VOICE_LLM_MAX_TOKENS") or cfg("llm.max_tokens", 360))
 
     def _chat_completions_url(self) -> str:
         if self.base_url.endswith("/chat/completions"):
@@ -167,7 +170,7 @@ def build_llm_client(
         return LLMClient(
             api_key=api_key,
             base_url=os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1",
-            model=model or os.getenv("LLM_MODEL") or "gpt-4o-mini",
+            model=model or os.getenv("LLM_MODEL") or cfg("model.llm", "gpt-4o-mini"),
         )
 
     # Default: DashScope (Qwen) or any OpenAI-compatible endpoint
